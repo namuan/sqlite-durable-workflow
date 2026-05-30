@@ -130,6 +130,11 @@ func (e *Engine) DB() *sql.DB {
 	return e.db
 }
 
+// QueryCompleted returns all workflows with status COMPLETED.
+func (e *Engine) QueryCompleted() ([]Workflow, error) {
+	return e.queryWorkflows("WHERE status = ?", StatusCompleted)
+}
+
 // QueryFailed returns all workflows with status FAILED.
 func (e *Engine) QueryFailed() ([]Workflow, error) {
 	return e.queryWorkflows("WHERE status = ?", StatusFailed)
