@@ -75,11 +75,26 @@ export interface LeaseConfig {
 
 // ── Client ─────────────────────────────────────────────────────
 
+export interface ClientOptions {
+  apiKey?: string;
+  timeout?: number;
+  maxRetries?: number;
+  retryDelay?: number;
+}
+
 export class Client {
   private baseUrl: string;
+  private apiKey: string | undefined;
+  private timeout: number;
+  private maxRetries: number;
+  private retryDelay: number;
 
-  constructor(baseUrl = "http://localhost:8080") {
+  constructor(baseUrl = "http://localhost:8080", opts?: ClientOptions) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.apiKey = opts?.apiKey;
+    this.timeout = opts?.timeout ?? 30_000;
+    this.maxRetries = opts?.maxRetries ?? 0;
+    this.retryDelay = opts?.retryDelay ?? 500;
   }
 
   private async request<T>(
@@ -87,18 +102,38 @@ export class Client {
     path: string,
     body?: unknown,
   ): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(
-        `HTTP ${res.status}: ${data.error ?? JSON.stringify(data)}`,
-      );
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
     }
-    return data as T;
+
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.timeout);
+        const res = await fetch(`${this.baseUrl}${path}`, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(
+            `HTTP ${res.status}: ${data.error ?? JSON.stringify(data)}`,
+          );
+        }
+        return data as T;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < this.maxRetries) {
+          await new Promise((r) => setTimeout(r, this.retryDelay));
+        }
+      }
+    }
+    throw lastError;
   }
 
   // ── Workflows ──────────────────────────────────────────────

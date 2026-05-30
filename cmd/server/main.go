@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	dbPath  = flag.String("db", "workflows.db", "path to SQLite database")
-	addr    = flag.String("addr", ":8080", "HTTP listen address")
-	tick    = flag.Duration("tick", 1*time.Second, "scheduler poll interval")
-	lease   = flag.Duration("lease", 30*time.Second, "default lease duration")
+	dbPath = flag.String("db", "workflows.db", "path to SQLite database")
+	addr   = flag.String("addr", ":8080", "HTTP listen address")
+	tick   = flag.Duration("tick", 1*time.Second, "scheduler poll interval")
+	lease  = flag.Duration("lease", 30*time.Second, "default lease duration")
+	apiKey = flag.String("api-key", "", "require Bearer token matching this value (empty = no auth)")
 )
 
 func main() {
@@ -77,7 +78,12 @@ func main() {
 	mux.HandleFunc("GET /observability/waiting", srv.queryWaiting)
 	mux.HandleFunc("GET /observability/avg-step-duration", srv.avgStepDuration)
 
-	hs := &http.Server{Addr: *addr, Handler: mux}
+	handler := http.Handler(mux)
+	if *apiKey != "" {
+		handler = requireBearer(mux, *apiKey)
+	}
+
+	hs := &http.Server{Addr: *addr, Handler: handler}
 
 	go func() {
 		log.Printf("listening on %s (db=%s)", *addr, *dbPath)
@@ -95,6 +101,17 @@ func main() {
 type server struct {
 	engine        *durable.Engine
 	leaseDuration time.Duration
+}
+
+func requireBearer(next http.Handler, key string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer "+key {
+			writeError(w, 401, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ── helpers ──────────────────────────────────────────────────────

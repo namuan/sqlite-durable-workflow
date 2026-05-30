@@ -6,6 +6,8 @@ for workflow execution, persistence, recovery, scheduling, and coordination.
 
 ## Design
 
+![](assets/c4-a.png)
+
 - **SQLite is the orchestrator** — no external queue, broker, or service
 - **Event-sourced** — every state transition is an immutable event
 - **Workers are stateless** — crash, restart, scale horizontally
@@ -14,15 +16,7 @@ for workflow execution, persistence, recovery, scheduling, and coordination.
 
 ## Project structure
 
-```
-sqlite-durable-workflow/
-├── engine.go, workflow.go, step.go ...  # Go library (package durable)
-├── cmd/
-│   ├── server/      # HTTP JSON API server wrapping the engine
-│   └── example/     # Runnable Go example using the library directly
-└── sdks/
-    └── typescript/  # TypeScript SDK + examples (talks to the HTTP server)
-```
+![](assets/c4-b.png)
 
 ## Install (Go library)
 
@@ -65,6 +59,17 @@ go run ./cmd/server/ -db workflows.db -addr :8080
 | `-addr` | `:8080` | HTTP listen address |
 | `-tick` | `1s` | Scheduler poll interval |
 | `-lease` | `30s` | Default lease duration |
+| `-api-key` | _(empty)_ | Require `Bearer` token matching this value (empty = no auth) |
+
+### Authentication
+
+When the `-api-key` flag is set, all requests must include an `Authorization` header:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+Requests without a valid key receive `401 Unauthorized`.
 
 ### Endpoints
 
@@ -107,6 +112,14 @@ npm install
 import { Client } from "@sqlite-durable-workflow/sdk";
 
 const client = new Client("http://localhost:8080");
+
+// With API key, timeout, and retry
+const client = new Client("http://localhost:8080", {
+  apiKey: "my-secret-key",
+  timeout: 10_000,
+  maxRetries: 3,
+  retryDelay: 500,
+});
 
 // Create a workflow
 const wf = await client.createWorkflow("order-123", "order_processing");
@@ -175,6 +188,7 @@ cd sdks/typescript && npx tsx examples/basic.ts
 | `Timer` | Scheduled timer |
 | `RetryConfig` | Retry configuration (fixed / linear / exponential) |
 | `LeaseConfig` | Lease parameters |
+| `ClientOptions` | Client config: `apiKey`, `timeout`, `maxRetries`, `retryDelay` |
 | `WorkflowStatus` | `"QUEUED" \| "RUNNING" \| "WAITING" \| "COMPLETED" \| "FAILED"` |
 
 ## Go API reference

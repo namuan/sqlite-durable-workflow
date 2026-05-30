@@ -10,17 +10,24 @@ const PROJECT_ROOT = resolve(__dirname, "../../..");
 const CMD_SERVER = resolve(PROJECT_ROOT, "cmd/server");
 
 const PORT = 19999;
+const AUTH_PORT = 19998;
 const BASE_URL = `http://localhost:${PORT}`;
+const AUTH_BASE_URL = `http://localhost:${AUTH_PORT}`;
 const DB_PATH = "/tmp/sdk-test.db";
+const AUTH_DB_PATH = "/tmp/sdk-test-auth.db";
+const TEST_API_KEY = "test-secret-key";
 
 let server: ChildProcess;
+let authServer: ChildProcess;
 let client: Client;
+let authClient: Client;
+let noKeyClient: Client;
 
-async function waitForServer(maxRetries = 30): Promise<void> {
+async function waitForServer(url: string, maxRetries = 30): Promise<void> {
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const res = await fetch(`${BASE_URL}/observability/failed`);
-      if (res.ok) return;
+      const res = await fetch(url);
+      if (res.ok || res.status === 401) return;
     } catch {
       // server not ready yet
     }
@@ -30,10 +37,14 @@ async function waitForServer(maxRetries = 30): Promise<void> {
 }
 
 beforeAll(async () => {
-  // Kill any lingering process on our port and clean up old db.
-  try { execSync(`lsof -ti:${PORT} | xargs kill -9 2>/dev/null`, { stdio: "ignore" }); } catch {}
-  for (const ext of ["", "-wal", "-shm"]) {
-    try { unlinkSync(DB_PATH + ext); } catch {}
+  // Kill any lingering processes on our ports and clean up old dbs.
+  for (const port of [PORT, AUTH_PORT]) {
+    try { execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null`, { stdio: "ignore" }); } catch {}
+  }
+  for (const db of [DB_PATH, AUTH_DB_PATH]) {
+    for (const ext of ["", "-wal", "-shm"]) {
+      try { unlinkSync(db + ext); } catch {}
+    }
   }
 
   server = spawn("go", ["run", CMD_SERVER, "-db", DB_PATH, "-addr", `:${PORT}`, "-tick", "200ms", "-lease", "5s"], {
@@ -41,14 +52,26 @@ beforeAll(async () => {
     stdio: "ignore",
   });
 
-  await waitForServer();
+  authServer = spawn("go", ["run", CMD_SERVER, "-db", AUTH_DB_PATH, "-addr", `:${AUTH_PORT}`, "-tick", "200ms", "-lease", "5s", `-api-key`, TEST_API_KEY], {
+    cwd: PROJECT_ROOT,
+    stdio: "ignore",
+  });
+
+  await waitForServer(`${BASE_URL}/observability/failed`);
+  await waitForServer(`${AUTH_BASE_URL}/observability/failed`);
+
   client = new Client(BASE_URL);
+  authClient = new Client(AUTH_BASE_URL, { apiKey: TEST_API_KEY });
+  noKeyClient = new Client(AUTH_BASE_URL);
 }, 15000);
 
 afterAll(() => {
   server?.kill("SIGTERM");
-  for (const ext of ["", "-wal", "-shm"]) {
-    try { unlinkSync(DB_PATH + ext); } catch {}
+  authServer?.kill("SIGTERM");
+  for (const db of [DB_PATH, AUTH_DB_PATH]) {
+    for (const ext of ["", "-wal", "-shm"]) {
+      try { unlinkSync(db + ext); } catch {}
+    }
   }
 });
 
@@ -383,5 +406,29 @@ describe("concurrency", () => {
     await expect(
       client.completeStep(wf!.workflow_id, "wb", 1, {}, {}),
     ).rejects.toThrow(/409/);
+  });
+});
+
+// ── Authentication ─────────────────────────────────────────────────
+
+describe("authentication", () => {
+  it("rejects requests without API key when server requires one", async () => {
+    await expect(noKeyClient.createWorkflow("auth-nokey", "test")).rejects.toThrow(/401/);
+  });
+
+  it("allows requests with correct API key", async () => {
+    const wf = await authClient.createWorkflow("auth-ok", "test");
+    expect(wf.workflow_id).toBe("auth-ok");
+    expect(wf.status).toBe("QUEUED");
+  });
+
+  it("allows full workflow lifecycle with API key", async () => {
+    await authClient.createWorkflow("auth-lifecycle", "test");
+    const wf = await authClient.acquireLease({ worker_id: "w1" });
+    expect(wf).not.toBeNull();
+    await authClient.completeStep(wf!.workflow_id, "w1", 1, {}, {});
+    await authClient.completeWorkflow(wf!.workflow_id, "w1");
+    const got = await authClient.getWorkflow(wf!.workflow_id);
+    expect(got.status).toBe("COMPLETED");
   });
 });
