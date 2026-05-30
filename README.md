@@ -270,6 +270,35 @@ Built-in backoff policies: `FixedBackoff`, `LinearBackoff`, `ExponentialBackoff`
 | `AvgStepDuration() (map[int]float64, error)` | Average step duration by number |
 | `GetEvents(id) ([]WorkflowEvent, error)`     | Full event history              |
 
+## Testing
+
+```bash
+make test          # run all tests (Go + TypeScript)
+make test-go       # Go tests only (with race detector)
+make test-ts       # TypeScript integration tests
+```
+
+### Go test suite (180 tests + 20 benchmarks)
+
+| File                            | Tests | Coverage |
+|---------------------------------|-------|----------|
+| `engine_test.go`                | 25    | Core lifecycle, leases, step checkpointing, signals, timers, retry, events, observability |
+| `engine_schema_test.go`         | 16    | Table existence, column nullability, indexes, defaults, PRAGMAs, foreign keys, STRICT enforcement |
+| `engine_state_machine_test.go`  | 30    | All 5 states reachable, valid/invalid transitions, version increments, FIFO ordering, lease lifecycle, boundary ID values |
+| `engine_concurrency_test.go`    | 15    | Multi-goroutine lease races, worker pools, concurrent signal/timer/step operations, mixed-operation stress |
+| `engine_edge_cases_test.go`     | 30    | Nil/boundary payloads, large step numbers, nonexistent workflows, empty queues, timer edge cases, JSON round-trip |
+| `engine_recovery_test.go`       | 10    | Crash with lease held, mid-step recovery, multi-workflow survival, signal/timer persistence, reopen, rolled-back transactions |
+| `engine_event_sourcing_test.go` | 15    | Sequence continuity, all event types emitted, monotonicity, multi-workflow isolation, state replay from events |
+| `engine_complex_scenarios_test.go` | 12 | Full saga with retry, signal-as-trigger, timer continuation, chained timers, interleaved workflows, lease transfer |
+| `engine_scheduler_test.go`      | 14    | Timer firing, future timer protection, lease expiry, continuous run, cancellation, multiple timers/leases, idle ticks |
+| `engine_benchmarks_test.go`     | 20    | Create, acquire, complete step, signal, timer throughput; concurrent variants; full lifecycle; scheduler overhead |
+
+All Go tests run with `-race` (Go race detector) enabled.
+
+### TypeScript integration tests (22 tests)
+
+End-to-end tests in `sdks/typescript/tests/sdk.test.ts` spawn a real `cmd/server/` process and exercise every API endpoint. Vitest runner with 15-second timeouts.
+
 ## License
 
 MIT
